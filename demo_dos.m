@@ -1,265 +1,293 @@
-clear all;
 fignum = 1;
-n = 64;
-k = 2;
+
+% **********************************************************************
+%                       Setting up the parameters
+% **********************************************************************
+
+% The scattering object is represented by a radius function, which is
+% a smooth, periodic function giving the radius of the object on some
+% parametrization t between 0 and 2*pi. 
+% In the code, this is given by a parametrized function:
+% x(t) = [ x_coord(t),  y_coord(t) ]
+% The function should be written so that if t is a column of M samples
+% of the polar angle (theta), then x(t) will be a M by 2 matrix with
+% the k^th row [x(t(k)), y(t(k))]. Some examples:
+%
+% A unit circle:
+% x(t) = @(t) [cos(t), sin(t)];
+%
+% An ellipse stretched in the x-direction:
+% x(t) = @(t) [5*cos(t), sin(t)]; 
+% 
+% You'll also need the first and second derivatives of this function
+% with respect to t. For the circle,
+%
+% dx(t) = @(t) [-sin(t), cos(t)];
+% ddx(t) = @(t) [-cos(t), -sin(t)];
+%
+% The example is a "kite" shape used in Colton and Kress, as well as 
+% several papers involving scattering:
+
 x   = @(t) [-0.65 + cos(t) + 0.65*cos(2*t),  1.5*sin(t)];
 dx  = @(t) [      - sin(t) - 1.30*sin(2*t),  1.5*cos(t)];
 ddx = @(t) [      - cos(t) - 2.60*cos(2*t), -1.5*sin(t)];
 
-r = @(t) sqrt( sum(x(t).^2,2) );
-dr = @(t) cos(t) + sin(t);
+% The solver converges exponentially (with respect to n, defined below) 
+% for analytic boundaries. One way to handle more complicated boundaries
+% while retaining this convergence is to approximate them with a 
+% trigonometric series. It should also be possible to base x, dx, and ddx on 
+% some sort of (at least twice continuously differentiable) splines and 
+% still get reasonable results, it'll just converge more slowly. 
 
-% Basis functions. Alpha should be a row vector of positive
-% values, t should be a column.
-cosat = @(alpha,t) cos(t*alpha)/sqrt(pi);
-sinat = @(alpha,t) sin(t*alpha)/sqrt(pi);
-const = @(t) ones(size(t))/sqrt(2*pi);
+% The solver is for the Helmholtz equation at a single wave number:
+% u'' + k^2*u = 0
+%
+% so you need to input the wave number:
 
-% derivatives of basis vectors
-dcosat = @(alpha,t) -repmat(alpha, size(t)) .* sinat(alpha,t);
-dsinat = @(alpha,t) repmat(alpha, size(t)) .* cosat(alpha,t);
-dconst = @(t) zeros(size(t));
+k = 2;
 
-% second derivatives of basis vectors
-ddcosat = @(alpha,t) -repmat(alpha.^2, size(t)) .* cosat(alpha,t);
-ddsinat = @(alpha,t) -repmat(alpha.^2, size(t)) .* sinat(alpha,t);
-ddconst = @(t) zeros(size(t));
+% You also need to provide the value of the incident wave on the boundary.
+% This is a frequency-domain based solver, so the easiest things to do
+% are plane waves in imaginary form. Here's an example:
 
+% Angle of the incident wave in degrees
+inc_ang = 0;    % Points horizontally to the right
 
+% Compute the unit direction from this angle. I am writing it as a column
+% since it will be multiplied on the left by a row in the next step.
+inc_dir = [cos(pi * inc_ang/180); sin(pi * inc_ang/180)];
 
-%x   = @(t) [ sqrt(1)*cos(t),  sqrt(2)*sin(t)];
-%dx  = @(t) [-sqrt(1)*sin(t),  sqrt(2)*cos(t)];
-%ddx = @(t) [-sqrt(1)*cos(t), -sqrt(2)*sin(t)];
+% The boundary function for the plane wave with this direction is:
+f = @(t) -exp(i*k * x(t)* inc_dir);
+% Note this involves the boundary shape function x(t) above. The negative
+% sign is needed due to how the problem is set up. The problem
+% is linear with respect to the function, f, so it should be possible to
+% make f the sum of several plane waves.
 
-% Angle of incident wave
-inc_a = 0;
-% Direction of incident wave
-inc_d = [cos(pi * inc_a/180); sin(pi * inc_a/180)];
-% Boundary condition due to incident wave
-f     = @(t) -exp(i*k * x(t)*inc_d); 
+% You also need a discretization level for the solver. I don't remember
+% if it's necessary, but I always make this a power of two. Larger values
+% correspond to more accurate solutions.
 
+n = 32;
 
-obj.x   = x;
-obj.dx  = dx; 
+% Finally, you can optionally provide a coupling parameter. This has to
+% do with the solution representation. If you don't provide it, it will
+% be set to k automatically, which was what was suggested in Colton and
+% Kress.
+
+%eta = k;
+
+% Stuff our definitions into a structure. Note inc_ang and inc_dir are
+% not included, as these were just helper functions for defining f.
+
+% Object shape function
+obj.x = x;
+obj.dx = dx;
 obj.ddx = ddx;
-obj.f   = f;
-obj.n   = n;
-obj.k   = k;
 
-disp('Time for solving equation:')
+% Boundary function
+obj.f = f;
+
+% Wave number
+obj.k = k;
+
+% Number of discretization points
+obj.n = n;
+
+% Optional coupling parameter
+%obj.eta = eta;
+
+
+% **********************************************************************
+%                       Solving for the density
+% **********************************************************************
+
+% With the above parameters defined, you compute the boundary density like
+% so:
+
+disp('Time for solving for the potential')
 tic;
 sol = dos_solve(obj);
 toc;
 
-% This is for verifying the same solution listed in Colton & Kress
-%angles = linspace(0, pi, 2)';
+% This provides you with the solution structure "sol", which has these
+% fields (these are in the comments at the top of  "dos_solve")
+
+% sol.t             Parameter grid that the problem was solved on.
+% sol.phi           Solution density, phi
+% sol.phiint        Function for interpolating the solution
+% sol.find_u        Function for finding the potential at pairs (x,y)
+% sol.find_u_list   Function for finding the potential at pairs x(j,:)
+% sol.A             Discretized integral operator.
+% sol.R             Quadrature matrix, mostly for debug
+% sol.g             Discretized right-hand side from the boundary condition
+% sol.eta           Eta repeated in case not in obj
+
+
+% **********************************************************************
+%                       Computing the far field
+% **********************************************************************
+
+% The far-field depends on angle only. So provide the angles you want
+% it solved at in a column vector. 
 
 angles = linspace(0, 2*pi, 129)';
 angles = angles(1:end-1);
 
-uinf = sol.find_uinf(angles);
-N = 256;
-disp('Time for computing far-field:')
+% Then use this function to get the far field:
+disp('Time for computing the far field')
 tic;
-[uinf, nu, v, xhat, phiN] = find_far_field(obj, sol, angles);
+uinf = find_far_field(obj, sol, angles);
 toc;
 
-vn = x(sol.solver.t);
-xn = vn(:,1);
-yn = vn(:,2);
-vn = dx(sol.solver.t);
-dxn = vn(:,1);
-dyn = vn(:,2);
-phin = sol.phi;
+% You can optionally provide an N after angles, which relates to how
+% accurately the integration used to compute the far field is approximated.
+% By default it determines this from the discretization in "sol". 
 
-xN = v(:,1);
-yN = v(:,2);
-dxN = nu(:,1);
-dyN = nu(:,2);
+% The real part of the far field potential is what you are interested
+% in:
 
-objnew = obj;
-%objnew.x   = @(t) [ sqrt(1)*cos(t),  sqrt(2)*sin(t)];
-%objnew.dx  = @(t) [-sqrt(1)*sin(t),  sqrt(2)*cos(t)];
-%objnew.ddx = @(t) [-sqrt(1)*cos(t), -sqrt(2)*sin(t)];
-objnew.x = @(t) 1.01*x(t);
-objnew.dx = @(t) 1.01*dx(t);
-objnew.ddx = @(t) 1.01*ddx(t);
+figure(fignum);
+fignum = fignum + 1;
+plot(180*angles/pi, real(uinf));
 
-disp('Time for new boundary update');
+% This is the potential, as a function of angle, of the wave field when
+% you are far from the scatterer and without the inverse square decay
+% exhibited by the field.
+
+
+% **********************************************************************
+%                       Computing the actual field
+% **********************************************************************
+
+% You can also compute the potential at arbitrary locations. There are
+% two interfaces for this. One allows you to specify the coordinates of
+% particular points you want the field at. For more information on that,
+% see the comments of the function "find_u_list" in the "dos_solve.m"
+% file (last function in the file, currently). You can call it from
+% sol.find_u_list(xs, ys, ts). For instance, if you used the ts defined
+% below and the values
+% xs = [1; 2]; ys = [3; 4]
+% the solver would compute the potential at coordinates (1, 3) and (2, 4).
+
+
+% For the other interface, you specify an x-coordinate
+% grid and a y-coordinate grid (column vectors):
+
+xn = 200;
+yn = 200;
+xs = linspace(-8, 8, xn)';
+ys = linspace(-8, 8, yn)';
+
+% You also specify the parameter samples of the boundary used in
+% approximating the integrals involved in this. This is similar to how the
+% optional N part in the far field computation can compute the solution
+% more precisely. For simplicity, you can just use the discretization the
+% solver used:
+
+ts = sol.solver.t;
+
+% Now compute the values at each possible combination of xs and ys with
+
+disp('Time for solving potential on grid')
 tic;
-[sol, obj] = sol.update_bdy(objnew);
-toc;
-disp('Time for new boundary far-field');
-tic;
-[uinf2, nu2, v2, xhat2, phi2] = find_far_field(obj, sol, angles);
+[v, xv, yv] = sol.find_u(xs, ys, ts);
 toc;
 
-% Cheesy test of inverse problem - not especially realistic conditions
-% since this basis is more-or-less perfect for the obstacle, but we'll
-% just see how it does with a basic Newton solve. 
 
-t = sol.solver.t;
-t = [t; t(1)];
-%t = linspace(0,2*pi,513)';
-% Basis for 1st and 2nd coordinates
-xfreqs = [1 2];
-yfreqs = [1 2];
-b1 = [const(t), cosat(xfreqs, t)];
-b2 = [sinat(yfreqs, t)];
+% Here v is a column vector of the potential at the grid points and 
+% xv, yv, are column vectors indicating the x & y position of the
+% sample in each row. For instance, v(1) is the potential at the
+% x-coordinate xv(1) and y-coordinate yv(1). You could, for example, do
 
-% Find the coordinate representation of the surface in the given basis
-% (this is the exact coordinates)
-v = x(t);
-x1 = v(:,1); 
-x2 = v(:,2);
-%c1 = trapz(repmat(t, size([1, xfreqs])), ...
-%           b1 .* repmat(x1, size([1, xfreqs]) ))';
-%c2 = trapz(repmat(t, size([yfreqs])), ...
-%           b2 .* repmat(x2, size([yfreqs]) ))';
-c1 = trapz((t), ...
-           b1 .* repmat(x1, size([1, xfreqs]) ))';
-c2 = trapz((t), ...
-           b2 .* repmat(x2, size([yfreqs]) ))';
+figure(fignum)
+fignum = fignum + 1;
+plot3(xv, yv, v, '.');
 
+% although this isn't a great visualization
 
-bdyx = @(c1, c2, t) [[const(t), cosat(xfreqs, t)]*c1, [sinat(yfreqs, t)]*c2];
+% This is the quasi-static solution for the scattered field, only. To see 
+% it in the time-domain, define a sound-speed
 
+c0 = 1;
 
-if 1 == 0
-scale = linspace(1, 2, 512)';
-for j=1:length(scale)
-    objnew.x = @(t) scale(j)*x(t);
-    objnew.dx = @(t) scale(j)*dx(t);
-    objnew.ddx = @(t) scale(j)*ddx(t);
-    [sol, obj] = sol.update_bdy(objnew);
-    [uinf2, nu2, v2, xhat2, phi2] = find_far_field(obj, sol, angles);
-    plot(sol.solver.t, real(uinf), sol.solver.t, real(uinf2))
-    axis([0 2*pi -3 3]);
-    %plot(real(uinf), imag(uinf), real(uinf2), imag(uinf2));
-    %axis([ -3 3 -3 3]);
-    pause(0.01);
-end
-end
+% and determine your frequency from this and the wave number
 
-% Activate this to visualize the far-field pattern as a function of
-% the scatterer shape
+w = k*c0;
 
-% NOTE: Maybe a better way to do this is to find the average radius
-% of the object, make that the radius for the far-field shape, and
-% put them on separate subplots. That way they're more comparable. 
-% What might be an even better idea would be to find the area of the
-% object and determine a radius that makes the other object have
-% the same area. Then the transformation from object to scattered
-% shape is isometric and the comparison should be easier to visualize.
-% This requires approximating the area, though, and is possibly easier
-% for some things than others, but since the function is extremely
-% smooth, it should work pretty well.
-uinforig = uinf;
+% Pick some time values to sample this at. For example, 16 samples over
+% two periods:
+numperiods = 2;
+times = linspace(0, numperiods*(2*pi/w), 16)';
 
+% We'll reshape the solution vector in order to display it as an image:
 
+vm = reshape(v, xn, yn)';
 
-if 1 == 1
-    th = angle(xn + i*yn);
-    th(th<0) = th(th<0) + 2*pi;
-    A = trapz(th, 0.5*(xn.^2 + yn.^2));
-    objeffr = sqrt(A/pi);
+% The time-domain solution is found by modulating the quasi-static solution
+% by exp(i*w*times(1)) and taking the real part. 
 
-    maxur = max(real(uinf));
-    minur = min(real(uinf));
-    maxui = max(imag(uinf));
-    minui = min(imag(uinf));
-
-    uinf = objeffr*(real(uinf) - minur) / (maxur-minur) + ...
-            objeffr*i*(imag(uinf) - minui) / (maxui-minui);
-    vangs = x(angles);
-    xangs = vangs(:,1);
-    yangs = vangs(:,2);
-    % Maximum radius of object
-    objR = sqrt(max( (xangs.^2 + yangs.^2) ));
-    % Set the far-field visualization shape so it doesn't intersect
-    % the object shape.
-    farmin = min(0, min(min(imag(uinf)), min(real(uinf))));
-    % The objR*c gives a bit of cushion if needed
-    R = objR - farmin + objR*0.1;
-
-    %figure(fignum);
-    %fignum = fignum + 1;
-    %tryme(R, uinf, sol.solver.t)
-    %uinfr = @(R) A - trapz(th, 0.5*(R + real(uinf).^2));
-    R = fsolve(@(R) Rsolve(R, uinf, sol.solver.t, A), sqrt(A/pi));
-    %R = abs(min(real(uinf)))
-    Ri = fsolve(@(R) Rsolve(R, uinf, sol.solver.t, A, 'im'), sqrt(A/pi));
-
-    Rmax = R + abs(max(max(real(uinf)), max(imag(uinf))));
-    figure(fignum);
-    fignum = fignum + 1;
-    uinfx = zeros(length(angles)+1,1);
-    uinfy = uinfx;
-    % Reference circle
-    ucirx = uinfx;
-    uciry = uinfx;
-    % Imaginary part, just for kicks
-    uimgx = uinfx;
-    uimgy = uinfx;
-
-    % Visualize far-field as deviation of radius of sphere.
-    for j = 1:length(angles)
-        uinfx(j) = (R + real(uinf(j)))*cos(angles(j));
-        uinfy(j) = (R + real(uinf(j)))*sin(angles(j));
-        uimgx(j) = (Ri + imag(uinf(j)))*cos(angles(j));
-        uimgy(j) = (Ri + imag(uinf(j)))*sin(angles(j));
-        %ucirx(j) = (R+objeffr*0.5)*cos(angles(j));
-        %uciry(j) = (R+objeffr*0.5)*sin(angles(j));
-        ucirx(j) = (objeffr)*cos(angles(j));
-        uciry(j) = (objeffr)*sin(angles(j));
+figure(fignum)
+fignum = fignum + 1;
+it = 1;
+for j = 1:4
+    for k = 1:4
+        subplot(4,4,it);
+        imagesc(xs, ys, real(exp(1i*w*times(it))*vm));
+        colormap(gray);
+        title(sprintf('Time=%f', times(it)));
+        it = it + 1;
     end
-    uinfx(end) = uinfx(1);
-    uinfy(end) = uinfy(1);
-    uimgx(end) = uimgx(1);
-    uimgy(end) = uimgy(1);
-    ucirx(end) = ucirx(1);
-    uciry(end) = uciry(1);
-    plot([xn; xn(1)], [yn; yn(1)], ...
-         uinfx, uinfy,...
-         ucirx, uciry, '+',...
-         uimgx, uimgy,...
-         -[inc_d(1)*(Rmax + 0.4*R), inc_d(1)*(Rmax + 0.1*R)], ...
-         -[inc_d(2)*(Rmax + 0.4*R), inc_d(2)*(Rmax + 0.1*R)], 'k',...
-         -inc_d(1)* (Rmax + 0.1*R), -inc_d(2)*(Rmax + 0.1*R), ...
-         'kx', 'LineWidth', 2, 'MarkerSize', 16);
-    legend('Object', 'Re(u_\infty)', 'Reference', 'Im(u_\infty)', ...
-            'Incident', 'Incident');
 end
 
+% Note that the calculations in the interior of the obstacle are not valid.
+% Also note that this is only the scattered field. To view the total field
+% you have to add in the incident field, as well.
 
-% Activate this to test for convergence to the far-field.
-if 1 == 0
 
-    % Same angles that uinf is computed at
-    xdirs = [cos(angles), sin(angles)];
-    %xs = R*[cos(angles), sin(angles)];
-    tc = sol.solver.t;
-    %tc = (0:(2*256-1))'*pi/256;
-    j=1;
-    Rn = linspace(3, 500, 500);
-    errs = zeros(length(Rn),1);
-    figure(fignum);
-    fignum = fignum + 1;
-    disp('Time for verification of far-field convergence');
-    tic;
-    for R = Rn;
-        xs = R*xdirs;
-        %disp('Time for computing potential at point list.')
-        [uinf_est, xnf, ynf] = sol.find_u_list(xs,tc); 
-        % This should retrieve the far-field portion of the potential
+% Calculate the field at the same (x,y) coordinates as the scattered field:
+ui = exp(i*k*[xv, yv]*inc_dir);
 
-        uinf_est = uinf_est / exp(i*k*R) * sqrt(R);
-        errs(j) = norm(uinf_est - uinf);
-        plot(angles, uinf, angles, uinf_est);
-        axis([0 2*pi -2.5 2.5]);
-        pause(0.01);
-        j = j + 1;
+% Reshape into matrix for display
+ui = reshape(ui, xn, yn)';
+
+
+figure(fignum)
+fignum = fignum + 1;
+it = 1;
+for j = 1:4
+    for k = 1:4
+        subplot(4,4,it);
+        % Note the addition of the incident field 
+        imagesc(xs, ys, real(exp(1i*w*times(it))*(vm + ui)));
+        colormap(gray);
+        title(sprintf('Time=%f', times(it)));
+        it = it + 1;
     end
-    toc;
-end
+end        
+
+
+% It's easier to see in motion
+
+doit = input('Show field in motion? (y/n)', 's')
+if doit == 'y' | doit == 'Y'
     
+
+    figure(fignum);
+    fignum = fignum + 1;
+    timesnew = linspace(times(1), times(end), 128);
+    colormap(gray);
+
+    for j = 1:length(timesnew);
+        subplot(1,2,1);
+        tds = exp(1i*w*timesnew(j))*vm;
+        tdi = exp(1i*w*timesnew(j))*ui;
+        imagesc(xs, ys, real(tds + tdi), [-2 2]);
+        title('Total');
+        subplot(1,2,2);
+        imagesc(xs, ys, real(tds), [-1.5 1.5]);
+        
+        title('Scattered');
+        pause(0.1);
+    end;
+end

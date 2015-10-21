@@ -454,8 +454,8 @@ function [v, xv, yv] = find_u(x, y, obj, sol, t)
 % xv - x-coordinate of pairs, (x,y)
 % yv - y-coordinate of pairs, (x,y)
 
-    if length(t) == length(sol.t) 
-        if t == sol.t
+    if length(t) == length(sol.solver.t) 
+        if t == sol.solver.t
             phi = sol.phi;
         else
             phi = phiint(t, obj, sol);
@@ -501,8 +501,8 @@ function [v, xv, yv] = find_u_list(x, obj, sol, t)
 % xv - x-coordinate, i.e., x(:,1)
 % yv - y-coordinate, i.e., x(:,2)
 
-    if length(t) == length(sol.t) 
-        if t == sol.t
+    if length(t) == length(sol.solver.t) 
+        if t == sol.solver.t
             phi = sol.phi;
         else
             phi = phiint(t, obj, sol);
