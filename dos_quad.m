@@ -17,7 +17,7 @@ function R = dos_quad(n, tn)
     R = zeros(length(tn), length(tj));
     for i = 1:length(tn)
         ti = tn(i);
-        % This is just a (hopefully) faster way of writing the
+        % This is just a faster way of writing the
         % sum over m. If the index is (i,j,m), M looks like 
         % 
         % M = [(i,1,1)    (i,2,1)  ...  (i,2*n,1) ;
@@ -25,14 +25,8 @@ function R = dos_quad(n, tn)
         %        ...        ...    ...     ...    ;
         %      (i,1,n-1) (i,2,n-1) ... (i,2*n,n-1);]
 
-        % It looks like the summation doesn't include the 
-        % pi/n^2 * cos(n*(ti - tj)) term so leave this out.
-        %M = cos(m*(ti - tj)) ./ repmat(m, size(tj)) - ...
-        %    pi/n^2 * repmat(cos(n*(ti - tj)), size(m));
-        %R(i,:) = -2*pi/n * sum(M, 1);
 
-        M = cos(m*(ti - tj)) ./ repmat(m, size(tj)) - ...
-            pi/n^2 * repmat(cos(n*(ti - tj)), size(m));
+        M = cos(m*(ti - tj)) ./ repmat(m, size(tj))
         R(i,:) = -2*pi/n*sum(M, 1) - pi/n^2 * cos(n*(ti - tj));
     end
     
